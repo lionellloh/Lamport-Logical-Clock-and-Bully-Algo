@@ -31,6 +31,7 @@ type client struct {
 	server        server
 	logicalTS     int
 	readyChannel  chan int
+	killChan chan int
 }
 
 type logTS struct {
@@ -65,12 +66,12 @@ func main() {
 
 	fmt.Println("ALL DONE!")
 	fmt.Println(len(allMessages))
-	messageArray := []message{}
-	for message := range allMessages {
-		messageArray = append(messageArray, message)
-	}
-
-	fmt.Println(len(messageArray))
+	//messageArray := []message{}
+	//for message := range allMessages {
+	//	messageArray = append(messageArray, message)
+	//}
+	//
+	//fmt.Println(len(messageArray))
 
 }
 
@@ -132,10 +133,13 @@ func (s server) listen(allMessages chan message) {
 			if numChannelsPinging == 0 {
 				//wg.Wait()
 				time.Sleep(time.Duration(MAX_NETWORK_DELAY) * time.Second)
-				//for _, client := range s.clientArray {
+				for _, client := range s.clientArray {
+					client.killChan <- 1
+				}
 				//	fmt.Printf("Server closing %s's channel \n", client.name)
 					//time.Sleep(10 * time.Second)
 					//close(client.clientChannel)
+
 				return
 				}
 
@@ -155,7 +159,8 @@ func NewClient(name string, s server) *client {
 
 	clientChannel := make(chan message)
 	readyChannel := make(chan int)
-	c := client{name, clientChannel, s, 0, readyChannel}
+	killChan := make(chan int)
+	c := client{name, clientChannel, s, 0, readyChannel, killChan}
 	return &c
 
 }
@@ -194,6 +199,9 @@ func (c client) pingAndListen(allMessages chan message) {
 				clientMessage = message{c.name, fmt.Sprintf("Hello %d from %s", messageNo, c.name), c.logicalTS}
 			}
 			c.server.channel <- clientMessage
+
+		case <- c.killChan:
+			return
 		default:
 
 		}

@@ -9,6 +9,8 @@ import (
 
 const NUMBER_OF_MESSAGES_TO_SEND int = 5
 const NUMBER_OF_CLIENTS int = 5
+const CLIENT_PING_INTERVAL float32 = 2
+const MAX_NETWORK_DELAY float32 = 5
 
 type server struct {
 	channel chan message
@@ -27,11 +29,13 @@ type client struct {
 	name          string
 	clientChannel chan message
 	server        server
-	lock sync.Mutex
+	logicalTS int
+	readyChannel chan int
+	//lock sync.Mutex
 	//logicalTS logTS
-	logicalTSChan chan int
+	//logicalTSChan chan int
 	//messagesReceived []message
-	messagesReceived chan message
+	//messagesReceived chan message
 }
 
 type logTS struct {
@@ -53,16 +57,12 @@ func main() {
 	}
 
 
-	//for _, c := range s.clientArray {
-	//	c.logicalTSChan <- 1
-	//	go c.ping()
-	//}
-	//
-	//for _, c := range s.clientArray {
-	//
-	//	go c.listen()
-	//}
+	for _, c := range s.clientArray {
+		fmt.Println(c.name)
 
+		go c.timePing()
+		go c.pingAndListen()
+	}
 
 	s.listen()
 
@@ -87,9 +87,9 @@ func Max(x, y int) int {
 }
 
 func sendMessage(clientChannel chan message, msg message) {
-	const MAX_DELAY float32 = 5
+
 	//random time delay
-	var numSeconds float32 = rand.Float32() * MAX_DELAY
+	var numSeconds float32 = rand.Float32() * MAX_NETWORK_DELAY
 	//fmt.Printf("Simulated Network Latency %f seconds \n", numSeconds)
 	time.Sleep(time.Duration(numSeconds) * time.Second)
 
@@ -126,19 +126,24 @@ func (s *server) addClient(c client) []client {
 func NewClient(name string, s server) *client {
 
 	clientChannel := make(chan message)
-	messagesReceived := make(chan message, NUMBER_OF_CLIENTS * NUMBER_OF_MESSAGES_TO_SEND)
-	logicalTSChan := make(chan int)
-	//logicalTS := logTS{0, sync.Mutex{}}
-
-	//logicalTSChan <- 1
-	c := client{name, clientChannel, s, sync.Mutex{}, logicalTSChan, messagesReceived}
+	readyChannel := make(chan int)
+	c := client{name, clientChannel, s, 0, readyChannel}
 	return &c
 
 }
 
+
+
 func (c *client) registerWithServer(s server) {
 	c.server = s
 	s.clientArray = s.addClient(*c)
+}
+
+func (c client) timePing(){
+	for i:=1; i <= NUMBER_OF_MESSAGES_TO_SEND; i++ {
+		time.Sleep(time.Duration(CLIENT_PING_INTERVAL) * time.Second)
+		c.readyChannel <- i
+	}
 }
 
 //func (c client) ping() {
@@ -188,9 +193,26 @@ func (c *client) registerWithServer(s server) {
 //		//c.logicalTS.numTS = lts
 //
 //		fmt.Printf( "listening: %d %s \n", lts, c.name)
-//		fmt.Printf("[TS: %d] Client %s: Received '%s' from server \n", lts, c.name, broadCastedMessage.messageString)
+//
 //		c.logicalTSChan <- lts
 //		c.lock.Unlock()
 //	}
 //
 //}
+
+
+func (c client) pingAndListen(){
+
+	for {
+		select {
+			case broadcastedMessage := <- c.clientChannel:
+				c.logicalTS = Max(c.logicalTS, broadcastedMessage.logicalTS) + 1
+				fmt.Printf("[TS: %d] %s: Received '%s' from %s \n", c.logicalTS, c.name, broadcastedMessage.messageString, broadcastedMessage.senderName)
+			case messageNo := <- c.readyChannel:
+				fmt.Printf("%s is pinging now at TS: %d \n", c.name, c.logicalTS)
+				c.logicalTS +=1
+				clientMessage := message{c.name, fmt.Sprintf("Hello %d from %s", messageNo, c.name), c.logicalTS }
+				c.server.channel <- clientMessage
+		}
+	}
+}

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"sort"
 	"sync"
 	"time"
 )
@@ -21,6 +22,7 @@ type server struct {
 
 type message struct {
 	senderName    string
+	receiverName string
 	messageString string
 	logicalTS     int
 }
@@ -42,7 +44,7 @@ type logTS struct {
 func main() {
 
 	var wg sync.WaitGroup
-	wg.Add(1)
+
 
 	s := NewServer()
 
@@ -53,27 +55,40 @@ func main() {
 		s.clientArray = append(s.clientArray, *c)
 
 	}
-	var allMessages chan message =  make(chan message, NUMBER_OF_CLIENTS * NUMBER_OF_CLIENTS * NUMBER_OF_MESSAGES_TO_SEND)
+	var allMessages chan message =  make(chan message, NUMBER_OF_CLIENTS * NUMBER_OF_CLIENTS * NUMBER_OF_MESSAGES_TO_SEND*10)
 
 	for _, c := range s.clientArray {
 		fmt.Println(c.name)
 		go c.timePing()
-		go c.pingAndListen(allMessages)
+		wg.Add(1)
+		go c.pingAndListen(allMessages, wg)
 
 	}
 
 	s.listen(allMessages)
-
-	fmt.Println("ALL DONE!")
 	fmt.Println(len(allMessages))
-	//messageArray := []message{}
-	//for message := range allMessages {
-	//	messageArray = append(messageArray, message)
-	//}
-	//
-	//fmt.Println(len(messageArray))
+	messageArray := []message{}
+
+	for _, client := range s.clientArray {
+		client.killChan <- 1
+	}
+
+	close(allMessages)
+	for message := range allMessages {
+		messageArray = append(messageArray, message)
+	}
+
+	sort.Slice(messageArray, func(i, j int) bool {
+		return messageArray[i].logicalTS < messageArray[j].logicalTS
+	})
 
 
+	fmt.Println("=========================")
+	fmt.Println("        Total Order      ")
+	fmt.Println("=========================")
+	for i, m := range messageArray {
+		fmt.Printf("%d: |Timestamp: %d | Sent from: %s | Sent to: %s | Message: %s \n", i, m.logicalTS, m.senderName, m.receiverName, m.messageString)
+	}
 
 }
 
@@ -94,7 +109,7 @@ func Max(x, y int) int {
 }
 
 func sendMessage(clientChannel chan message, msg message) {
-	fmt.Println("send message", msg.messageString, msg.senderName)
+	fmt.Println(msg.messageString, msg.senderName)
 	//random time delay
 	var numSeconds float32 = rand.Float32() * MAX_NETWORK_DELAY
 	//fmt.Printf("Simulated Network Latency %f seconds \n", numSeconds)
@@ -111,7 +126,7 @@ func (s server) listen(allMessages chan message) {
 	var numChannelsPinging int = NUMBER_OF_CLIENTS
 	for {
 		msg := <-s.channel
-		//allMessages <- msg
+		allMessages <- msg
 		s.logicalTS = Max(s.logicalTS, msg.logicalTS) + 1
 		fmt.Printf("[TS: %d] Server: Received <%s> from client <%s> \n", s.logicalTS, msg.messageString, msg.senderName)
 
@@ -120,7 +135,7 @@ func (s server) listen(allMessages chan message) {
 			if client.name == msg.senderName {
 				continue
 			} else {
-				newMessage := message{"Server", fmt.Sprintf("[Forwarded] %s", msg.messageString), s.logicalTS}
+				newMessage := message{"Server", client.name,fmt.Sprintf("[Forwarded] %s", msg.messageString), s.logicalTS}
 				//wg.Add(1)
 				go sendMessage(client.clientChannel, newMessage)
 			}
@@ -135,12 +150,8 @@ func (s server) listen(allMessages chan message) {
 			if numChannelsPinging == 0 {
 				//wg.Wait()
 				time.Sleep(time.Duration(MAX_NETWORK_DELAY) * time.Second)
-				for _, client := range s.clientArray {
-					client.killChan <- 1
-				}
-				//	fmt.Printf("Server closing %s's channel \n", client.name)
-					//time.Sleep(10 * time.Second)
-					//close(client.clientChannel)
+
+				fmt.Println("Returning Server Routine")
 
 				return
 				}
@@ -182,23 +193,23 @@ func (c client) timePing() {
 	return
 }
 
-func (c client) pingAndListen(allMessages chan message) {
+func (c client) pingAndListen(allMessages chan message, serverWG sync.WaitGroup) {
 	var clientMessage message
 
 	for {
 		select {
 
 		case broadcastedMessage := <-c.clientChannel:
-			//allMessages <- broadcastedMessage
+			allMessages <- broadcastedMessage
 			c.logicalTS = Max(c.logicalTS, broadcastedMessage.logicalTS) + 1
 			fmt.Printf("[TS: %d] %s: Received '%s' from %s \n", c.logicalTS, c.name, broadcastedMessage.messageString, broadcastedMessage.senderName)
 		case messageNo := <-c.readyChannel:
 			fmt.Printf("%s is pinging now at TS: %d for message %d \n", c.name, c.logicalTS, messageNo)
 			c.logicalTS += 1
 			if messageNo == NUMBER_OF_MESSAGES_TO_SEND {
-				clientMessage = message{c.name, "LAST", c.logicalTS}
+				clientMessage = message{c.name, "Server", "LAST", c.logicalTS}
 			} else {
-				clientMessage = message{c.name, fmt.Sprintf("Hello %d from %s", messageNo, c.name), c.logicalTS}
+				clientMessage = message{c.name, "Server", fmt.Sprintf("Hello %d from %s", messageNo, c.name), c.logicalTS}
 			}
 			c.server.channel <- clientMessage
 

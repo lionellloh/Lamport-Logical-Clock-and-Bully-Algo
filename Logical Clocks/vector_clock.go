@@ -38,14 +38,7 @@ type client struct {
 }
 
 func main() {
-	//Test Merge()
-	//v1 := [TOTAL_PROCESSES] int {2,3,1,4,3,2}
-	//v2 := [TOTAL_PROCESSES] int {3,9,6,4,3,5}
-	//
-	//fmt.Println(lessThan(v1, v2))
-	//
-	//
-	//fmt.Println(merge(v1, v2, 4))
+
 	s := NewServer(0)
 
 	for i := 1; i <= NUMBER_OF_CLIENTS; i++ {

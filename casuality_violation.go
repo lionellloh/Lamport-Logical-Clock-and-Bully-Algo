@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"github.com/golang/protobuf/ptypes/any"
 	"math/rand"
+	"sort"
 	"time"
 )
 
@@ -16,7 +18,6 @@ type server struct {
 	pid int
 	channel chan message
 	clientArray []client
-	logicalTS   int
 	vectorClock [TOTAL_PROCESSES] int
 }
 
@@ -24,7 +25,6 @@ type message struct {
 	senderName    string
 	receiverName string
 	messageString string
-	//logicalTS     int
 	vectorClock [TOTAL_PROCESSES] int
 }
 
@@ -33,7 +33,6 @@ type client struct {
 	name          string
 	clientChannel chan message
 	server        server
-	//logicalTS     int
 	readyChannel  chan int
 	killChan chan int
 	vectorClock [TOTAL_PROCESSES] int
@@ -41,8 +40,12 @@ type client struct {
 
 func main() {
 	//Test Merge()
-	//v1 := [TOTAL_PROCESSES] int {2,3,1,4,5,7}
-	//v2 := [TOTAL_PROCESSES] int {3,9,6,4,3,1}
+	//v1 := [TOTAL_PROCESSES] int {2,3,1,4,3,2}
+	//v2 := [TOTAL_PROCESSES] int {3,9,6,4,3,5}
+	//
+	//fmt.Println(lessThan(v1, v2))
+	//
+	//
 	//fmt.Println(merge(v1, v2, 4))
 	s := NewServer(0)
 
@@ -55,7 +58,8 @@ func main() {
 
 	}
 	var allMessages chan message =  make(chan message, NUMBER_OF_CLIENTS * NUMBER_OF_CLIENTS * NUMBER_OF_MESSAGES_TO_SEND*10)
-
+	//Store all potential instances of causality violations
+	var potentialCV chan string = make(chan string, NUMBER_OF_CLIENTS * NUMBER_OF_CLIENTS * NUMBER_OF_MESSAGES_TO_SEND)
 	for _, c := range s.clientArray {
 		fmt.Println(c.name)
 		go c.timePing()
@@ -76,9 +80,9 @@ func main() {
 		messageArray = append(messageArray, message)
 	}
 
-	//sort.Slice(messageArray, func(i, j int) bool {
-	//	return messageArray[i].vectorClock < messageArray[j].vectorClock
-	//})
+	sort.Slice(messageArray, func(i, j int) bool {
+		return lessThan(messageArray[i].vectorClock, messageArray[j].vectorClock)
+	})
 
 
 	fmt.Println("=========================")
@@ -88,6 +92,16 @@ func main() {
 		fmt.Printf("%d: |Timestamp: %d | Sent from: %s | Sent to: %s | Message: %s \n", i, m.vectorClock, m.senderName, m.receiverName, m.messageString)
 	}
 
+}
+
+func lessThan(a1 [TOTAL_PROCESSES] int, a2 [TOTAL_PROCESSES] int ) bool{
+	//If a1 is element wise <= than a2, return true
+	for i, _ := range a1{
+		if a1[i] > a2[i] {
+			return false
+		}
+	}
+	return true
 }
 
 
@@ -127,7 +141,7 @@ func NewServer(pid int) *server {
 	clientArray := []client{}
 	vectorClock := [TOTAL_PROCESSES] int {}
 
-	s := server{pid, channel, clientArray, 0, vectorClock}
+	s := server{pid, channel, clientArray, vectorClock}
 
 	return &s
 }
@@ -147,8 +161,7 @@ func sendMessage(clientChannel chan message, msg message) {
 	return
 }
 
-func (s server) listen(allMessages chan message) {
-	//wg := sync.WaitGroup{}
+func (s server) listen(allMessages chan message, potentialCV chan string) {
 	var numChannelsPinging int = NUMBER_OF_CLIENTS
 	for {
 		msg := <-s.channel
@@ -156,10 +169,12 @@ func (s server) listen(allMessages chan message) {
 		s.vectorClock = merge(s.vectorClock, msg.vectorClock, s.pid)
 		if moreThan(s.vectorClock, msg.vectorClock) {
 			fmt.Println("POTENTIAL CAUSALITY VIOLATION")
+			potentialCV <- fmt.Sprintf("|From: %s| To:%s | MessageVC: %s| Receiver: %s | Message Text: %s",
+				msg.senderName, msg.receiverName, msg.vectorClock, s.vectorClock, msg.messageString)
 		}
 		msg.vectorClock = s.vectorClock
 		allMessages <- msg
-		fmt.Printf("[TS: %d] Server: Received <%s> from client <%s> \n", s.logicalTS, msg.messageString, msg.senderName)
+		fmt.Printf("[TS: %d] Server: Received <%s> from client <%s> \n", msg.messageString, msg.senderName)
 
 		s.vectorClock[s.pid] += 1
 		//Server broadcasting
@@ -168,7 +183,6 @@ func (s server) listen(allMessages chan message) {
 				continue
 			} else {
 				newMessage := message{"Server", client.name,fmt.Sprintf("[Forwarded] %s", msg.messageString), s.vectorClock}
-				//wg.Add(1)
 				go sendMessage(client.clientChannel, newMessage)
 			}
 
@@ -228,7 +242,7 @@ func (c client) timePing() {
 
 
 
-func (c client) pingAndListen(allMessages chan message) {
+func (c client) pingAndListen(allMessages chan message, potentialCV chan string) {
 	var clientMessage message
 
 	for {
@@ -240,6 +254,8 @@ func (c client) pingAndListen(allMessages chan message) {
 			c.vectorClock = merge(c.vectorClock, broadcastedMessage.vectorClock, c.pid)
 			if moreThan(c.vectorClock, broadcastedMessage.vectorClock){
 				fmt.Println("DETECTED POTENTIAL CAUSALITY VIOLATION")
+				potentialCV <- fmt.Sprintf("|From: %s| To:%s | MessageVC: %s| Receiver: %s | Message Text: %s",
+					broadcastedMessage.senderName, broadcastedMessage.receiverName, broadcastedMessage.vectorClock, c.vectorClock, broadcastedMessage.messageString)
 			}
 			broadcastedMessage.vectorClock = c.vectorClock
 			allMessages <- broadcastedMessage

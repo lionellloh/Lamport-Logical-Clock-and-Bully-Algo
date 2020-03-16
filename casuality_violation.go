@@ -3,14 +3,13 @@ package main
 import (
 	"fmt"
 	"math/rand"
-	"sort"
 	"time"
 )
 
 const NUMBER_OF_MESSAGES_TO_SEND int = 3
 const NUMBER_OF_CLIENTS int = 5
 const CLIENT_PING_INTERVAL float32 = 2
-const MAX_NETWORK_DELAY float32 = 2
+const MAX_NETWORK_DELAY float32 = 10
 const TOTAL_PROCESSES int = NUMBER_OF_CLIENTS + 1
 
 type server struct {
@@ -77,9 +76,9 @@ func main() {
 		messageArray = append(messageArray, message)
 	}
 
-	sort.Slice(messageArray, func(i, j int) bool {
-		return messageArray[i].vectorClock < messageArray[j].vectorClock
-	})
+	//sort.Slice(messageArray, func(i, j int) bool {
+	//	return messageArray[i].vectorClock < messageArray[j].vectorClock
+	//})
 
 
 	fmt.Println("=========================")
@@ -109,8 +108,18 @@ func merge(vcReceiver [TOTAL_PROCESSES]int, vcSender [TOTAL_PROCESSES]int, recei
 
 		vcRet[receiverPID] +=1
 		return vcRet
-	}
+}
 
+func moreThan(vcReceiver [TOTAL_PROCESSES]int, vcSender [TOTAL_PROCESSES]int) bool {
+	//If vcReciver > vcSender: return True. Else false.
+	for i, _ := range vcReceiver {
+		//vcRet = append(vcRet, Max(vcSender[i], vcReceiver[i]))
+		if vcReceiver[i] <= vcSender[i]{
+			return false
+		}
+ 	}
+ 	return true
+}
 
 
 func NewServer(pid int) *server {
@@ -143,8 +152,13 @@ func (s server) listen(allMessages chan message) {
 	var numChannelsPinging int = NUMBER_OF_CLIENTS
 	for {
 		msg := <-s.channel
-		allMessages <- msg
+
 		s.vectorClock = merge(s.vectorClock, msg.vectorClock, s.pid)
+		if moreThan(s.vectorClock, msg.vectorClock) {
+			fmt.Println("POTENTIAL CAUSALITY VIOLATION")
+		}
+		msg.vectorClock = s.vectorClock
+		allMessages <- msg
 		fmt.Printf("[TS: %d] Server: Received <%s> from client <%s> \n", s.logicalTS, msg.messageString, msg.senderName)
 
 		s.vectorClock[s.pid] += 1
@@ -221,9 +235,15 @@ func (c client) pingAndListen(allMessages chan message) {
 		select {
 
 		case broadcastedMessage := <-c.clientChannel:
-			allMessages <- broadcastedMessage
+
 			//c.logicalTS = Max(c.logicalTS, broadcastedMessage.logicalTS) + 1
 			c.vectorClock = merge(c.vectorClock, broadcastedMessage.vectorClock, c.pid)
+			if moreThan(c.vectorClock, broadcastedMessage.vectorClock){
+				fmt.Println("DETECTED POTENTIAL CAUSALITY VIOLATION")
+			}
+			broadcastedMessage.vectorClock = c.vectorClock
+			allMessages <- broadcastedMessage
+
 			fmt.Printf("[TS: %d] %s: Received '%s' from %s \n", c.vectorClock, c.name, broadcastedMessage.messageString, broadcastedMessage.senderName)
 		case messageNo := <-c.readyChannel:
 			c.vectorClock[c.pid] +=1
